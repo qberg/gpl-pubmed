@@ -1,9 +1,12 @@
 import os
 import re
 import json
+import argparse
 from tqdm.auto import tqdm
 import torch
+from huggingface_hub import interpreter_login 
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from datasets import load_dataset
 
 class QGenModel():
     """
@@ -14,11 +17,11 @@ class QGenModel():
     """
     def __init__(
         self,
-        dataset = pubmed,
+        dataset,
         model_path = "BeIR/query-gen-msmarco-t5-base-v1",
         device = None
     ):
-        self.pubmed = pubmed
+        self.pubmed = dataset,
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         self.model = AutoModelForSeq2SeqLM.from_pretrained(model_path)
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
@@ -30,7 +33,7 @@ class QGenModel():
         self.data_folder = './generated_data'
 
         # init the corpus generator object
-        self.init_corpus()
+        #self.init_corpus()
 
     def cleanup(
         self,
@@ -67,10 +70,11 @@ class QGenModel():
         passages_batch = []
         self.queries = []
         self.lines = []
+        #for i in tqdm(range(0,target,3), desc='generating queries...'):
         with tqdm(total=target) as progress:
-            for passage in self.corpus:
-                if count >= target:
-                    break
+            for passage in pubmed:
+                passage = self.cleanup(passage['text'])
+                if count >= target:break
                 passages_batch.append(passage)
                 if len(passages_batch) == batch_size:
                 
@@ -145,3 +149,47 @@ class QGenModel():
         self.write_pass_to_jsonl(corpus_file)
         self.write_query_to_jsonl(query_file)
         self.write_qrels_to_tsv(qrels_file)
+
+
+if __name__=="__main__":
+    parser = argparse.ArgumentParser(description='for generating queries')
+    parser.add_argument('--target', help='number of queries to be generated', required=True)
+    parser.add_argument(
+        '--corpus_file_name', 
+        help='name of the file in which corpus will be saved',
+        required=True
+    )
+    parser.add_argument(
+        '--query_file_name', 
+        help='name of the file in which generated queries will be saved',
+        required=True
+    )
+    parser.add_argument(
+        '--qrels_file_name', 
+        help='name of the file in which generated training data after first step will be saved',
+        required=True
+    )
+    args = parser.parse_args()
+
+    # Pubmed login
+    interpreter_login()
+    
+    # Loaidng the pubmed data
+    pubmed = load_dataset("ddp-iitm/pubmed_raw_text_v3", use_auth_token=True, streaming=True, split='train')
+
+    # for line in pubmed:
+    #     print(line['text'])
+    #     break
+
+    # Initainting a query generating model class
+    qgen = QGenModel(dataset=pubmed)
+
+    # Starting the query generatiom
+    qgen.generate(target=int(args.target))
+
+    # Writing the data as jsonl files
+    qgen.write_data(
+        corpus_file = args.corpus_file_name,
+        query_file  = args.query_file_name,
+        qrels_file  = args.qrels_file_name
+    )
